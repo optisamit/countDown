@@ -299,12 +299,6 @@ chrome.runtime.onConnect.addListener((port) => {
         }
         port.onDisconnect.addListener(() => {
             activePorts.delete(port);
-            if (activePorts.size === 0) {
-                if (countDown.badgeHandler) {
-                    clearInterval(countDown.badgeHandler);
-                    countDown.badgeHandler = undefined;
-                }
-            }
         });
     }
 });
