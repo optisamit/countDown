@@ -8,14 +8,58 @@ import { LitElement, html, customElement, property } from '../lib/lit-element.js
 import './cd-timer.js';
 import "./cd-header.js";
 import { Theme } from '../theme.js';
+class CountDownProxy {
+    constructor(onUpdate) {
+        this.Timers = [];
+        this.sounds = ["media/alert.mp3", "media/open-ended.ogg", "media/open-your-eyes-and-see.ogg", "media/oringz-w437.ogg", "media/slow-spring-board.ogg", "media/to-the-point.ogg", "media/youve-been-informed.ogg"];
+        chrome.runtime.connect({ name: 'keepAlive' });
+        chrome.storage.sync.get(['timersData', 'badgeTimer'], (data) => {
+            this.Timers = data.timersData || [];
+            const badgeId = data.badgeTimer;
+            this.badgeTimer = this.Timers.find(t => t.id === badgeId);
+            onUpdate();
+        });
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName === 'sync') {
+                if (changes.timersData) {
+                    this.Timers = changes.timersData.newValue || [];
+                }
+                if (changes.badgeTimer || changes.timersData) {
+                    const badgeId = changes.badgeTimer ? changes.badgeTimer.newValue : (this.badgeTimer ? this.badgeTimer.id : undefined);
+                    this.badgeTimer = this.Timers.find(t => t.id === badgeId);
+                }
+                onUpdate();
+            }
+        });
+    }
+    startTimer(timer) {
+        chrome.runtime.sendMessage({ action: 'startTimer', timer });
+    }
+    stopTimer(timer) {
+        chrome.runtime.sendMessage({ action: 'stopTimer', timer });
+    }
+    createTimer() {
+        chrome.runtime.sendMessage({ action: 'createTimer' });
+    }
+    removeTimer(timer) {
+        chrome.runtime.sendMessage({ action: 'removeTimer', timer });
+    }
+    updateTimer(timer) {
+        chrome.runtime.sendMessage({ action: 'updateTimer', timer });
+    }
+    setBadgeTimer(timer) {
+        chrome.runtime.sendMessage({ action: 'setBadgeTimer', timer });
+    }
+}
 let CountDownView = class CountDownView extends LitElement {
     constructor() {
         super();
         this.selected = 0;
         let element = this;
-        chrome.runtime.getBackgroundPage(function (cd) {
-            element.countDown = cd.countDown;
+        element.timers = [];
+        element.countDown = new CountDownProxy(() => {
             element.timers = element.countDown.Timers;
+            element.requestUpdate();
         });
         chrome.storage.sync.get(function (Data) {
             if (Data.themeIndex !== undefined) {

@@ -3,6 +3,63 @@ import './cd-timer.js';
 import "./cd-header.js";
 import { Theme } from '../theme.js';
 
+class CountDownProxy {
+  public Timers: Array<TimerModel> = [];
+  public badgeTimer: TimerModel | undefined;
+  public sounds = ["media/alert.mp3", "media/open-ended.ogg", "media/open-your-eyes-and-see.ogg", "media/oringz-w437.ogg", "media/slow-spring-board.ogg", "media/to-the-point.ogg", "media/youve-been-informed.ogg"];
+
+  constructor(onUpdate: () => void) {
+    // Connect keepAlive port
+    chrome.runtime.connect({ name: 'keepAlive' });
+
+    // Load initial data from storage
+    chrome.storage.sync.get(['timersData', 'badgeTimer'], (data) => {
+      this.Timers = data.timersData || [];
+      const badgeId = data.badgeTimer;
+      this.badgeTimer = this.Timers.find(t => t.id === badgeId);
+      onUpdate();
+    });
+
+    // Listen to changes in storage to update in real-time
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'sync') {
+        if (changes.timersData) {
+          this.Timers = changes.timersData.newValue || [];
+        }
+        if (changes.badgeTimer || changes.timersData) {
+          const badgeId = changes.badgeTimer ? changes.badgeTimer.newValue : (this.badgeTimer ? this.badgeTimer.id : undefined);
+          this.badgeTimer = this.Timers.find(t => t.id === badgeId);
+        }
+        onUpdate();
+      }
+    });
+  }
+
+  public startTimer(timer: TimerModel) {
+    chrome.runtime.sendMessage({ action: 'startTimer', timer });
+  }
+
+  public stopTimer(timer: TimerModel) {
+    chrome.runtime.sendMessage({ action: 'stopTimer', timer });
+  }
+
+  public createTimer() {
+    chrome.runtime.sendMessage({ action: 'createTimer' });
+  }
+
+  public removeTimer(timer: TimerModel) {
+    chrome.runtime.sendMessage({ action: 'removeTimer', timer });
+  }
+
+  public updateTimer(timer: TimerModel) {
+    chrome.runtime.sendMessage({ action: 'updateTimer', timer });
+  }
+
+  public setBadgeTimer(timer: TimerModel) {
+    chrome.runtime.sendMessage({ action: 'setBadgeTimer', timer });
+  }
+}
+
 @customElement('count-down')
 export class CountDownView extends LitElement {
   countDown: CountDown;
@@ -19,10 +76,12 @@ export class CountDownView extends LitElement {
     super();
 
     let element = this;
-    chrome.runtime.getBackgroundPage(function (cd) {
-      element.countDown = cd.countDown;
+    element.timers = [];
+
+    element.countDown = new CountDownProxy(() => {
       element.timers = element.countDown.Timers;
-    });
+      element.requestUpdate();
+    }) as any;
 
     chrome.storage.sync.get(function (Data) {
       if (Data.themeIndex !== undefined) {

@@ -1,3 +1,4 @@
+"use strict";
 class CountDown {
     constructor() {
         this.sounds = ["media/alert.mp3", "media/open-ended.ogg", "media/open-your-eyes-and-see.ogg", "media/oringz-w437.ogg", "media/slow-spring-board.ogg", "media/to-the-point.ogg", "media/youve-been-informed.ogg"];
@@ -20,8 +21,8 @@ class CountDown {
             }
             timer.end = new Date().getTime() + timeout;
             timer.pause = undefined;
-            if (timeout > 0 && timeout < Math.pow(2, 31) - 1) {
-                timer.handle = setTimeout(this._onAlarm, timeout, timer);
+            if (timeout > 0) {
+                chrome.alarms.create(timer.id, { when: timer.end });
                 chrome.notifications.clear(timer.id);
             }
             if (this.badgeTimer == timer) {
@@ -31,10 +32,7 @@ class CountDown {
         else {
             timer.pause = timer.end - new Date().getTime();
             timer.end = undefined;
-            if (timer.handle !== undefined) {
-                clearTimeout(timer.handle);
-                timer.handle = undefined;
-            }
+            chrome.alarms.clear(timer.id);
         }
         countDown._save();
     }
@@ -42,10 +40,7 @@ class CountDown {
         timer.end = undefined;
         timer.start = undefined;
         timer.pause = undefined;
-        if (timer.handle !== undefined) {
-            clearTimeout(timer.handle);
-            timer.handle = undefined;
-        }
+        chrome.alarms.clear(timer.id);
         countDown._updateBadge();
         countDown._save();
     }
@@ -90,14 +85,16 @@ class CountDown {
         }
     }
     _startBadge() {
-        chrome.browserAction.setBadgeBackgroundColor({ color: "#388E3C" });
-        this.badgeHandler = setInterval(this._updateBadge, 100);
+        chrome.action.setBadgeBackgroundColor({ color: "#388E3C" });
+        if (this.badgeHandler === undefined) {
+            this.badgeHandler = setInterval(this._updateBadge, 100);
+        }
     }
     _updateBadge() {
         if (countDown.badgeTimer !== undefined) {
             if (countDown.badgeTimer.end !== undefined) {
                 let time = (countDown.badgeTimer.start == countDown.badgeTimer.end) ? new Date().getTime() - countDown.badgeTimer.start : countDown.badgeTimer.end - new Date().getTime();
-                chrome.browserAction.setBadgeText({ text: CountDown._convertTime(time, true) });
+                chrome.action.setBadgeText({ text: CountDown._convertTime(time, true) });
             }
             else {
                 if (countDown.badgeHandler !== undefined) {
@@ -105,12 +102,12 @@ class CountDown {
                     countDown.badgeHandler = undefined;
                 }
                 if (countDown.badgeTimer.pause !== undefined) {
-                    chrome.browserAction.setBadgeBackgroundColor({ color: "#FF5722" });
-                    chrome.browserAction.setBadgeText({ text: CountDown._convertTime(Math.abs(countDown.badgeTimer.pause), true) });
+                    chrome.action.setBadgeBackgroundColor({ color: "#FF5722" });
+                    chrome.action.setBadgeText({ text: CountDown._convertTime(Math.abs(countDown.badgeTimer.pause), true) });
                 }
                 else {
-                    chrome.browserAction.setBadgeBackgroundColor({ color: "#1976D2" });
-                    chrome.browserAction.setBadgeText({ text: CountDown._convertTime(countDown.badgeTimer.time, true) });
+                    chrome.action.setBadgeBackgroundColor({ color: "#1976D2" });
+                    chrome.action.setBadgeText({ text: CountDown._convertTime(countDown.badgeTimer.time, true) });
                 }
             }
         }
@@ -119,7 +116,7 @@ class CountDown {
                 clearInterval(countDown.badgeHandler);
                 countDown.badgeHandler = undefined;
             }
-            chrome.browserAction.setBadgeText({ text: "" });
+            chrome.action.setBadgeText({ text: "" });
         }
     }
     _save() {
@@ -178,8 +175,11 @@ class CountDown {
         this.Timers.forEach(timer => {
             if (timer.end !== undefined && timer.pause === undefined && timer.start !== timer.end) {
                 let timeout = timer.end - new Date().getTime();
-                if (timeout < Math.pow(2, 31) - 1) {
-                    timer.handle = setTimeout(this._onAlarm, timeout, timer);
+                if (timeout > 0) {
+                    chrome.alarms.create(timer.id, { when: timer.end });
+                }
+                else {
+                    this._onAlarm(timer);
                 }
             }
         });
@@ -206,26 +206,20 @@ class CountDown {
             requireInteraction: true,
             silent: true
         };
-        chrome.notifications.create(timer.id, options, function (id) {
-            chrome.notifications.onButtonClicked.addListener(function (id, index) {
-                if (index != 0) {
-                    return;
-                }
-                countDown.Timers.some(timer => {
-                    if (timer.id == id) {
-                        if (timer.end === undefined) {
-                            countDown.startTimer(timer);
-                        }
-                        return true;
-                    }
-                });
-            });
-        });
+        chrome.notifications.create(timer.id, options);
     }
     _playSound(timer) {
-        var sound = new Audio(this.sounds[timer.sound - 1]);
-        sound.volume = timer.volume;
-        sound.play();
+        const soundPath = this.sounds[timer.sound - 1];
+        const volume = timer.volume;
+        chrome.offscreen.createDocument({
+            url: 'views/offscreen.html',
+            reasons: ['AUDIO_PLAYBACK'],
+            justification: 'Play alarm sound'
+        }).then(() => {
+            chrome.runtime.sendMessage({ action: 'play', sound: soundPath, volume });
+        }).catch(() => {
+            chrome.runtime.sendMessage({ action: 'play', sound: soundPath, volume });
+        });
     }
     static _convertTime(ms, short = false) {
         return new Date(ms).toJSON().replace(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d{3})Z/, function (match, p1, p2, p3, p4, p5, p6, p7) {
@@ -251,3 +245,70 @@ class CountDown {
     }
 }
 var countDown = new CountDown();
+let activePorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+    if (port.name === 'keepAlive') {
+        activePorts.add(port);
+        if (countDown.badgeTimer && !countDown.badgeHandler) {
+            countDown['_startBadge']();
+        }
+        port.onDisconnect.addListener(() => {
+            activePorts.delete(port);
+            if (activePorts.size === 0) {
+                if (countDown.badgeHandler) {
+                    clearInterval(countDown.badgeHandler);
+                    countDown.badgeHandler = undefined;
+                }
+            }
+        });
+    }
+});
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    let timer = message.timer;
+    if (timer && timer.id) {
+        const found = countDown.Timers.find(t => t.id === timer.id);
+        if (found) {
+            Object.assign(found, timer);
+            timer = found;
+        }
+    }
+    switch (message.action) {
+        case 'startTimer':
+            countDown.startTimer(timer);
+            break;
+        case 'stopTimer':
+            countDown.stopTimer(timer);
+            break;
+        case 'createTimer':
+            countDown.createTimer();
+            break;
+        case 'removeTimer':
+            countDown.removeTimer(timer);
+            break;
+        case 'updateTimer':
+            countDown.updateTimer(timer);
+            break;
+        case 'setBadgeTimer':
+            countDown.setBadgeTimer(timer);
+            break;
+    }
+});
+chrome.alarms.onAlarm.addListener((alarm) => {
+    const timer = countDown.Timers.find(t => t.id === alarm.name);
+    if (timer) {
+        countDown['_onAlarm'](timer);
+    }
+});
+chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (index !== 0) {
+        return;
+    }
+    countDown.Timers.some(timer => {
+        if (timer.id === id) {
+            if (timer.end === undefined) {
+                countDown.startTimer(timer);
+            }
+            return true;
+        }
+    });
+});
